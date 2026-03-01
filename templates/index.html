@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bahamas Springboard — ZIP Reader</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Jost:wght@300;400;500;600&family=DM+Mono&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sand: #f5f0e8;
+  --sand2: #ede6d6;
+  --warm: #fdfaf5;
+  --ocean: #4a8fa8;
+  --gold: #c9a84c;
+  --gold-light: #fdf6e3;
+  --ink: #2c2416;
+  --muted: #8a7d6b;
+  --border: #ddd5c4;
+  --success: #4a8f6f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Jost', sans-serif; background: var(--sand); color: var(--ink); min-height: 100vh; }
+
+header {
+  background: var(--warm);
+  border-bottom: 1px solid var(--border);
+  padding: 0 3rem;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 16px rgba(44,36,22,0.05);
+}
+.logo { font-family: 'Cormorant Garamond', serif; font-size: 1.5rem; font-weight: 700; }
+.logo span { color: var(--ocean); }
+.logo small { display: block; font-family: 'Jost', sans-serif; font-size: 0.6rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+.badge { font-family: 'DM Mono', monospace; font-size: 0.68rem; letter-spacing: 0.1em; color: var(--muted); background: var(--sand); border: 1px solid var(--border); padding: 5px 14px; border-radius: 20px; }
+
+.hero { text-align: center; padding: 3.5rem 2rem 2.5rem; max-width: 680px; margin: 0 auto; }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: 0.7rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ocean); margin-bottom: 0.8rem; }
+.hero h1 { font-family: 'Cormorant Garamond', serif; font-size: clamp(2.2rem,5vw,3.5rem); font-weight: 600; line-height: 1.15; margin-bottom: 0.8rem; }
+.hero h1 em { color: var(--gold); font-style: italic; }
+.hero p { color: var(--muted); font-weight: 300; line-height: 1.7; font-size: 0.95rem; }
+
+main { max-width: 1100px; margin: 0 auto; padding: 0 2rem 5rem; }
+
+.upload-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 16px;
+  background: var(--warm);
+  padding: 3.5rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  margin-bottom: 1.5rem;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--gold);
+  background: var(--gold-light);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(201,168,76,0.1);
+}
+.upload-zone input { display: none; }
+.upload-icon { width: 68px; height: 68px; margin: 0 auto 1.2rem; background: var(--sand2); border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); }
+.upload-icon svg { width: 28px; height: 28px; fill: none; stroke: var(--gold); stroke-width: 1.5; }
+.upload-zone h2 { font-family: 'Cormorant Garamond', serif; font-size: 1.5rem; font-weight: 600; margin-bottom: 0.4rem; }
+.upload-zone p { color: var(--muted); font-size: 0.88rem; font-weight: 300; }
+.upload-zone strong { color: var(--ocean); font-weight: 500; }
+
+#progressSection { display: none; margin-bottom: 1.5rem; }
+.prog-box { background: var(--warm); border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem 1.8rem; }
+.prog-top { display: flex; justify-content: space-between; font-family: 'DM Mono', monospace; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.7rem; }
+.prog-bg { height: 4px; background: var(--sand2); border-radius: 99px; overflow: hidden; }
+.prog-fill { height: 100%; background: linear-gradient(90deg, var(--ocean), var(--gold)); border-radius: 99px; width: 0%; transition: width 0.5s ease; }
+
+.err { display: none; background: #fff5f5; border: 1px solid #f5c6c6; border-radius: 8px; padding: 12px 16px; color: #c0392b; font-family: 'DM Mono', monospace; font-size: 0.78rem; margin-bottom: 1rem; }
+
+#resultsSection { display: none; animation: fadeUp 0.5s ease; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+
+.res-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding-bottom: 1.2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+.res-title { font-family: 'Cormorant Garamond', serif; font-size: 1.7rem; font-weight: 600; }
+.btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.btn { font-family: 'Jost', sans-serif; font-size: 0.78rem; font-weight: 500; padding: 8px 18px; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; }
+.btn-ocean { background: var(--ocean); color: white; }
+.btn-ocean:hover { opacity: 0.85; }
+.btn-gold { background: var(--gold); color: white; }
+.btn-gold:hover { opacity: 0.85; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--ink); }
+.btn-outline:hover { border-color: var(--ocean); color: var(--ocean); }
+
+/* Sections */
+.section { margin-bottom: 2rem; }
+.sec-title { font-family: 'Cormorant Garamond', serif; font-size: 1.2rem; font-weight: 700; color: var(--ink); margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--sand2); display: flex; align-items: center; gap: 0.5rem; }
+.sec-title .dot { width: 10px; height: 10px; background: var(--gold); border-radius: 50%; }
+
+/* Field rows */
+.field-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--warm);
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  gap: 1rem;
+  transition: background 0.15s;
+}
+.field-row:hover { background: var(--gold-light); }
+.field-label { font-family: 'DM Mono', monospace; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); min-width: 180px; flex-shrink: 0; padding-top: 2px; }
+.field-value { font-size: 0.92rem; font-weight: 500; color: var(--ink); flex: 1; word-break: break-word; line-height: 1.5; }
+.copy-btn {
+  font-family: 'DM Mono', monospace;
+  font-size: 0.65rem;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--sand);
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.copy-btn:hover { background: var(--ocean); color: white; border-color: var(--ocean); }
+.copy-btn.copied { background: var(--success); color: white; border-color: var(--success); }
+
+/* Tables */
+.tbl-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); margin-top: 0.5rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+thead tr { background: var(--sand2); }
+thead th { font-family: 'DM Mono', monospace; font-size: 0.65rem; padding: 10px 12px; text-align: left; letter-spacing: 0.06em; color: var(--ink); white-space: nowrap; border-bottom: 1px solid var(--border); }
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.12s; }
+tbody tr:hover { background: var(--gold-light); }
+tbody tr:last-child { border-bottom: none; }
+tbody td { padding: 8px 12px; vertical-align: top; line-height: 1.5; }
+.tbl-copy { float: right; margin-bottom: 0.5rem; }
+
+/* Images */
+.img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.img-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: white; }
+.img-card img { width: 100%; display: block; max-height: 260px; object-fit: cover; }
+.img-name { font-family: 'DM Mono', monospace; font-size: 0.68rem; padding: 8px 12px; background: var(--sand2); color: var(--muted); }
+
+/* Raw text */
+details { margin-top: 1rem; }
+details summary { cursor: pointer; font-family: 'DM Mono', monospace; font-size: 0.72rem; color: var(--muted); padding: 8px 0; }
+.raw { font-family: 'DM Mono', monospace; font-size: 0.74rem; background: var(--ink); color: #e8dfc8; padding: 18px; border-radius: 8px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; line-height: 1.8; margin-top: 0.5rem; }
+
+.empty { color: var(--muted); font-size: 0.88rem; font-style: italic; padding: 1rem 0; }
+
+@media (max-width: 640px) {
+  header { padding: 0 1rem; }
+  main { padding: 0 1rem 3rem; }
+  .field-label { min-width: 130px; font-size: 0.6rem; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Bahamas <span>Springboard</span><small>ZIP Document Reader</small></div>
+  <div class="badge">MCA DATA PORTAL</div>
+</header>
+
+<div class="hero">
+  <div class="eyebrow">Automated Document Extraction</div>
+  <h1>Every Field, <em>Instantly</em></h1>
+  <p>Upload your MCA ZIP file and get all company data — organized by section, with a copy button on every field.</p>
+</div>
+
+<main>
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept=".zip">
+    <div class="upload-icon">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    </div>
+    <h2>Drop Your ZIP File Here</h2>
+    <p>or <strong>click to browse</strong> &nbsp;·&nbsp; AOC-4, MGT-7A, Excel & Images supported</p>
+  </div>
+
+  <div id="progressSection">
+    <div class="prog-box">
+      <div class="prog-top"><span id="progText">Reading files…</span><span id="progPct">0%</span></div>
+      <div class="prog-bg"><div class="prog-fill" id="progFill"></div></div>
+    </div>
+  </div>
+
+  <div class="err" id="errMsg"></div>
+
+  <div id="resultsSection">
+    <div class="res-header">
+      <div class="res-title" id="resTitle">Extracted Data</div>
+      <div class="btn-row">
+        <button class="btn btn-gold" onclick="downloadAll()">⬇ Download</button>
+        <button class="btn btn-ocean" onclick="copyAll()">⧉ Copy All</button>
+        <button class="btn btn-outline" onclick="reset()">↺ New ZIP</button>
+      </div>
+    </div>
+    <div id="output"></div>
+  </div>
+</main>
+
+<script>
+let extracted = {};
+
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('click', () => document.getElementById('fileInput').click());
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); });
+document.getElementById('fileInput').addEventListener('change', e => { if (e.target.files[0]) upload(e.target.files[0]); });
+
+function setP(pct, txt) {
+  document.getElementById('progFill').style.width = pct + '%';
+  document.getElementById('progPct').textContent = pct + '%';
+  document.getElementById('progText').textContent = txt;
+}
+
+async function upload(file) {
+  document.getElementById('errMsg').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'block';
+  document.getElementById('resultsSection').style.display = 'none';
+  setP(15, 'Uploading ZIP…');
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    setP(40, 'Reading files inside ZIP…');
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    setP(80, 'Organizing data…');
+    const data = await res.json();
+
+    if (data.error) {
+      const e = document.getElementById('errMsg');
+      e.textContent = '⚠ ' + data.error;
+      e.style.display = 'block';
+      document.getElementById('progressSection').style.display = 'none';
+      return;
+    }
+
+    setP(100, 'Done!');
+    extracted = data;
+    render(file.name);
+
+  } catch(e) {
+    const em = document.getElementById('errMsg');
+    em.textContent = '⚠ ' + e.message;
+    em.style.display = 'block';
+  }
+}
+
+function render(zipName) {
+  document.getElementById('resTitle').textContent = '📦 ' + zipName;
+  const out = document.getElementById('output');
+  out.innerHTML = '';
+
+  // ── Company Info ──────────────────────────────
+  const info = extracted.company_info || {};
+  if (Object.keys(info).length) {
+    out.innerHTML += section('🏢 Company Information',
+      Object.entries(info).map(([k,v]) => fieldRow(k, v)).join('')
+    );
+  }
+
+  // ── Employees ────────────────────────────────
+  const emp = extracted.employees || {};
+  if (Object.keys(emp).length) {
+    out.innerHTML += section('👥 Employees',
+      Object.entries(emp).map(([k,v]) => fieldRow(k, v)).join('')
+    );
+  }
+
+  // ── Auditor ──────────────────────────────────
+  const aud = extracted.auditor || {};
+  if (Object.keys(aud).length) {
+    out.innerHTML += section('📋 Auditor Details',
+      Object.entries(aud).map(([k,v]) => fieldRow(k, v)).join('')
+    );
+  }
+
+  // ── Directors ────────────────────────────────
+  const dirs = extracted.directors || [];
+  if (dirs.length) {
+    out.innerHTML += section('👔 Directors', buildTable(dirs));
+  }
+
+  // ── Shareholders ─────────────────────────────
+  const shs = extracted.shareholders || [];
+  if (shs.length) {
+    let shHTML = '';
+    shs.forEach(s => {
+      shHTML += `<div style="margin-bottom:1rem;font-family:'DM Mono',monospace;font-size:0.72rem;color:var(--muted)">Sheet: ${esc(s.sheet)} — ${esc(s.source)}</div>`;
+      shHTML += buildTableFromHeaders(s.headers, s.rows);
+    });
+    out.innerHTML += section('📊 Shareholders', shHTML);
+  }
+
+  // ── Business Activity ────────────────────────
+  const ba = extracted.business_activity || [];
+  if (ba.length) {
+    out.innerHTML += section('⚙ Business Activity & NIC Codes', buildTable(ba));
+  }
+
+  // ── Subsidiaries ─────────────────────────────
+  const subs = extracted.subsidiaries || [];
+  if (subs.length) {
+    out.innerHTML += section('🏦 Subsidiaries & Associates', buildTable(subs));
+  }
+
+  // ── Images ───────────────────────────────────
+  const imgs = extracted.images || [];
+  if (imgs.length) {
+    let imgHTML = '<div class="img-grid">';
+    imgs.forEach(img => {
+      imgHTML += `<div class="img-card">
+        <img src="data:image/${img.mime};base64,${img.data}" alt="${esc(img.name)}"/>
+        <div class="img-name">${esc(img.name)}</div>
+      </div>`;
+    });
+    imgHTML += '</div>';
+    out.innerHTML += section('🖼 Office Photos & Signboards', imgHTML);
+  }
+
+  // ── Raw Text (collapsible) ────────────────────
+  const raws = extracted.raw_texts || [];
+  if (raws.length) {
+    let rawHTML = '';
+    raws.forEach(r => {
+      rawHTML += `<details>
+        <summary>▶ ${esc(r.name)}</summary>
+        <div class="raw">${esc(r.text || '')}</div>
+      </details>`;
+    });
+    out.innerHTML += section('📄 Full Raw Text', rawHTML);
+  }
+
+  if (!out.innerHTML) {
+    out.innerHTML = '<div class="empty">No data could be extracted. Please check your ZIP file.</div>';
+  }
+
+  document.getElementById('resultsSection').style.display = 'block';
+  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+function section(title, content) {
+  return `<div class="section">
+    <div class="sec-title"><span class="dot"></span>${title}</div>
+    ${content || '<div class="empty">No data found</div>'}
+  </div>`;
+}
+
+function fieldRow(label, value) {
+  const id = 'f' + Math.random().toString(36).slice(2);
+  return `<div class="field-row">
+    <div class="field-label">${esc(label)}</div>
+    <div class="field-value" id="${id}">${esc(String(value))}</div>
+    <button class="copy-btn" onclick="copyField('${id}', this)">Copy</button>
+  </div>`;
+}
+
+function buildTable(rows) {
+  if (!rows.length) return '<div class="empty">No data</div>';
+  const headers = rows[0];
+  const body = rows.slice(1).filter(r => r.some(c => c));
+  if (!body.length) return '<div class="empty">No data rows</div>';
+  return `<div class="tbl-wrap"><table>
+    <thead><tr>${headers.map(h => `<th>${esc(String(h||''))}</th>`).join('')}</tr></thead>
+    <tbody>${body.map(row =>
+      `<tr>${headers.map((_,i) => `<td>${esc(String(row[i]||''))}</td>`).join('')}</tr>`
+    ).join('')}</tbody>
+  </table></div>`;
+}
+
+function buildTableFromHeaders(headers, rows) {
+  if (!rows.length) return '<div class="empty">No data</div>';
+  return `<div class="tbl-wrap"><table>
+    <thead><tr>${headers.map(h => `<th>${esc(String(h||''))}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(row =>
+      `<tr>${headers.map((_,i) => `<td>${esc(String(row[i]||''))}</td>`).join('')}</tr>`
+    ).join('')}</tbody>
+  </table></div>`;
+}
+
+function copyField(id, btn) {
+  const val = document.getElementById(id)?.textContent || '';
+  navigator.clipboard.writeText(val).then(() => {
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function getAllText() {
+  const info = extracted.company_info || {};
+  const emp  = extracted.employees || {};
+  const aud  = extracted.auditor || {};
+  let out = '═'.repeat(50) + '\nBAHAMAS SPRINGBOARD — EXTRACTED DATA\n' + '═'.repeat(50) + '\n\n';
+  out += '── COMPANY INFO ──\n';
+  Object.entries(info).forEach(([k,v]) => out += `${k}: ${v}\n`);
+  out += '\n── EMPLOYEES ──\n';
+  Object.entries(emp).forEach(([k,v]) => out += `${k}: ${v}\n`);
+  out += '\n── AUDITOR ──\n';
+  Object.entries(aud).forEach(([k,v]) => out += `${k}: ${v}\n`);
+  out += '\n── DIRECTORS ──\n';
+  (extracted.directors||[]).forEach(r => out += r.join(' | ') + '\n');
+  out += '\n── SHAREHOLDERS ──\n';
+  (extracted.shareholders||[]).forEach(s => {
+    out += `Sheet: ${s.sheet}\n`;
+    s.rows.forEach(r => out += r.join(' | ') + '\n');
+  });
+  return out;
+}
+
+function copyAll() {
+  navigator.clipboard.writeText(getAllText()).then(() => alert('✅ All data copied!'));
+}
+
+function downloadAll() {
+  const blob = new Blob([getAllText()], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bahamas_data.txt';
+  a.click();
+}
+
+function reset() {
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('resultsSection').style.display = 'none';
+  document.getElementById('errMsg').style.display = 'none';
+  document.getElementById('fileInput').value = '';
+  extracted = {};
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
+```
+
+5. Press **Ctrl + S** to save
+
+Then in terminal:
+```
+python app.py
