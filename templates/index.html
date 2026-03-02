@@ -233,7 +233,11 @@ async function upload(file) {
     setP(40, 'Reading files inside ZIP…');
     const res = await fetch('/upload', { method: 'POST', body: fd });
     setP(80, 'Organizing data…');
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch { throw new Error('Server error: ' + text.slice(0, 200)); }
+    if (!res.ok && !data.error) throw new Error('HTTP ' + res.status);
 
     if (data.error) {
       const e = document.getElementById('errMsg');
