@@ -189,6 +189,18 @@ def extract_structured_from_text(text):
     return [{'heading': 'Extracted Text', 'type': 'text', 'content': text}]
 
 
+@app.errorhandler(500)
+def internal_error(err):
+    return jsonify({'error': f'Internal server error: {str(err)}'}), 500
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({'error': 'File too large. Please upload a smaller file.'}), 413
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok', 'anthropic': bool(os.environ.get('ANTHROPIC_API_KEY'))})
+
 @app.route('/')
 def home():
     return render_template('index.html')

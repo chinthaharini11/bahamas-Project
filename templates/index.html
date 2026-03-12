@@ -692,7 +692,7 @@ async function upload(file, appendMode = false) {
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); }
-    catch { throw new Error('Server error: ' + text.slice(0, 200)); }
+    catch { throw new Error(text.slice(0, 300) || `Server returned HTTP ${res.status} with no response body. Check that ANTHROPIC_API_KEY is set in Render environment variables.`); }
     if (!res.ok && !data.error) throw new Error('HTTP ' + res.status);
 
     if (data.error) {
