@@ -10,7 +10,6 @@ import re
 import anthropic
 import json
 import uuid
-import concurrent.futures
 import threading
 from pathlib import Path
 
@@ -93,9 +92,7 @@ def extract_text_with_ocr(pdf_data, max_pages=10):
         return ''
     try:
         images = convert_from_bytes(pdf_data, dpi=100, last_page=max_pages)
-        # Parallelize OCR across pages — each page spawns its own tesseract process
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(images), 4)) as page_exec:
-            page_texts = list(page_exec.map(pytesseract.image_to_string, images))
+        page_texts = [pytesseract.image_to_string(img) for img in images]
         return '\n'.join(page_texts)
     except Exception as e:
         print(f"OCR ERROR: {str(e)}")
@@ -436,9 +433,8 @@ def _upload_inner():
             print(f"Unhandled error processing {short}: {e}")
         return p
 
-    # Process all entries in parallel (up to 8 concurrent workers)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        partials = list(executor.map(process_zip_entry, entries))
+    # Process entries sequentially on free-tier (low RAM) — avoids OOM 502s
+    partials = [process_zip_entry(e) for e in entries]
 
     # Merge partial results into final results
     for p in partials:
