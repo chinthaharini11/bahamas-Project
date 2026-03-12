@@ -208,6 +208,13 @@ def home():
 
 @app.route('/upload', methods=['POST'])
 def upload():
+    try:
+        return _upload_inner()
+    except Exception as exc:
+        print(f"Unhandled upload error: {exc}")
+        return jsonify({'error': f'Unexpected server error: {str(exc)}'}), 500
+
+def _upload_inner():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'})
 
