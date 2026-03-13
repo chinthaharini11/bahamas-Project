@@ -91,8 +91,17 @@ def extract_text_with_ocr(pdf_data, max_pages=10):
     if not OCR_AVAILABLE:
         return ''
     try:
-        images = convert_from_bytes(pdf_data, dpi=100, last_page=max_pages)
-        page_texts = [pytesseract.image_to_string(img) for img in images]
+        images = convert_from_bytes(pdf_data, dpi=200, last_page=max_pages)
+        page_texts = []
+        for img in images:
+            try:
+                text = pytesseract.image_to_string(img, timeout=30)
+                page_texts.append(text)
+            except Exception as ocr_e:
+                print(f"OCR page error: {ocr_e}")
+            finally:
+                img.close()
+        del images
         return '\n'.join(page_texts)
     except Exception as e:
         print(f"OCR ERROR: {str(e)}")
@@ -355,7 +364,7 @@ def _upload_inner():
                 except Exception as e:
                     text = f'Error reading PDF: {str(e)}'
 
-                if not text.strip() or text.startswith('Error reading PDF'):
+                if len(text.strip()) < 50 or text.startswith('Error reading PDF'):
                     ocr_text = extract_text_with_ocr(data)
                     print(f"OCR result length: {len(ocr_text)}, preview: {ocr_text[:100]}")
                     text = ocr_text.strip() or "[Scanned PDF - OCR returned no text]"
@@ -433,8 +442,10 @@ def _upload_inner():
             print(f"Unhandled error processing {short}: {e}")
         return p
 
-    # Process entries sequentially on free-tier (low RAM) — avoids OOM 502s
-    partials = [process_zip_entry(e) for e in entries]
+    # Process entries sequentially, freeing memory after each entry
+    partials = []
+    for entry in entries:
+        partials.append(process_zip_entry(entry))
 
     # Merge partial results into final results
     for p in partials:
