@@ -49,6 +49,18 @@ app = Flask(__name__)
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'bahamas_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Clean up any leftover files on startup
+def _cleanup_folder(folder):
+    if os.path.exists(folder):
+        for f in os.listdir(folder):
+            try:
+                os.remove(os.path.join(folder, f))
+            except Exception:
+                pass
+
+_cleanup_folder(UPLOAD_FOLDER)
+_cleanup_folder(os.path.join(os.path.dirname(__file__), 'uploads'))
+
 _NO_TEXT_PLACEHOLDERS = frozenset([
     "[Scanned PDF - OCR returned no text]",
     "[No text could be extracted from this PDF]",
