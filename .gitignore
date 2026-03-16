@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *.pyo
-uploads/
 *.zip
 .DS_Store
 venv/
