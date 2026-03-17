@@ -7,42 +7,35 @@ import openpyxl
 import base64
 import io
 import re
-import anthropic
-import json
 import uuid
-import threading
 from pathlib import Path
 
 # Read .env directly — handles BOM, quotes, CRLF, and spaces
 _env_path = Path(__file__).parent / '.env'
 if _env_path.exists():
-    with open(_env_path, encoding='utf-8-sig') as _ef:  # utf-8-sig strips BOM automatically
+    with open(_env_path, encoding='utf-8-sig') as _ef:
         for _line in _ef:
             _line = _line.strip()
             if _line and not _line.startswith('#') and '=' in _line:
                 _k, _, _v = _line.partition('=')
                 _k = _k.strip()
-                _v = _v.strip().strip('"').strip("'")  # remove surrounding quotes
+                _v = _v.strip().strip('"').strip("'")
                 if _k and _v:
                     os.environ.setdefault(_k, _v)
                     print(f"[.env] Loaded: {_k} = {_v[:6]}...")
 
 try:
-    from openai import OpenAI as OpenAIClient
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
-try:
-    import pytesseract
     from pdf2image import convert_from_bytes
     from docx import Document
-    OCR_AVAILABLE = True
+    PDF2IMAGE_AVAILABLE = True
 except ImportError:
-    OCR_AVAILABLE = False
+    PDF2IMAGE_AVAILABLE = False
 
-if OCR_AVAILABLE and os.name == 'nt':
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+try:
+    from google.cloud import vision
+    GOOGLE_VISION_AVAILABLE = True
+except ImportError:
+    GOOGLE_VISION_AVAILABLE = False
 
 
 app = Flask(__name__)
@@ -54,51 +47,45 @@ _NO_TEXT_PLACEHOLDERS = frozenset([
     "[No text could be extracted from this PDF]",
 ])
 
-_anthropic_client = None
-_openai_client = None
-_client_lock = threading.Lock()
 
-def get_anthropic_client():
-    global _anthropic_client
-    if _anthropic_client is None:
-        with _client_lock:
-            if _anthropic_client is None:
-                api_key = os.environ.get('ANTHROPIC_API_KEY')
-                if api_key:
-                    _anthropic_client = anthropic.Anthropic(api_key=api_key)
-    return _anthropic_client
-
-def get_openai_client():
-    global _openai_client
-    if _openai_client is None and OPENAI_AVAILABLE:
-        with _client_lock:
-            if _openai_client is None and OPENAI_AVAILABLE:
-                api_key = os.environ.get('OPENAI_API_KEY')
-                if api_key:
-                    _openai_client = OpenAIClient(api_key=api_key)
-    return _openai_client
-
-def parse_ai_json(raw):
-    """Strip markdown fences and parse JSON from AI response."""
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r'^```[a-z]*\n?', '', raw)
-        raw = re.sub(r'\n?```$', '', raw)
-    return json.loads(raw)
-
-
-def extract_text_with_ocr(pdf_data, max_pages=10):
-    if not OCR_AVAILABLE:
+def _google_vision_ocr(image_bytes):
+    """OCR a single image using Google Cloud Vision API."""
+    if not GOOGLE_VISION_AVAILABLE:
         return ''
     try:
-        images = convert_from_bytes(pdf_data, dpi=200, last_page=max_pages)
+        client = vision.ImageAnnotatorClient()
+        image = vision.Image(content=image_bytes)
+        response = client.text_detection(image=image)
+        if response.error.message:
+            print(f"Vision API error: {response.error.message}")
+            return ''
+        texts = response.text_annotations
+        return texts[0].description if texts else ''
+    except Exception as e:
+        print(f"Google Vision OCR error: {e}")
+        return ''
+
+
+def extract_text_with_ocr(pdf_data, max_pages=5):
+    """OCR a PDF using Google Cloud Vision API."""
+    if not PDF2IMAGE_AVAILABLE:
+        return ''
+    if not GOOGLE_VISION_AVAILABLE:
+        print("Google Vision API not available - install google-cloud-vision")
+        return ''
+    try:
+        images = convert_from_bytes(pdf_data, dpi=150, last_page=max_pages)
         page_texts = []
-        for img in images:
+        for i, img in enumerate(images):
             try:
-                text = pytesseract.image_to_string(img, timeout=30)
-                page_texts.append(text)
+                img_buffer = io.BytesIO()
+                img.save(img_buffer, format='PNG')
+                img_bytes = img_buffer.getvalue()
+                text = _google_vision_ocr(img_bytes)
+                if text:
+                    page_texts.append(text)
             except Exception as ocr_e:
-                print(f"OCR page error: {ocr_e}")
+                print(f"OCR page {i+1} error: {ocr_e}")
             finally:
                 img.close()
         del images
@@ -109,90 +96,79 @@ def extract_text_with_ocr(pdf_data, max_pages=10):
 
 
 def extract_data_from_image(image_b64, mime, filename):
-    """Use Claude vision to extract structured data from an image."""
-    client = get_anthropic_client()
-    if not client:
+    """Extract data from image using Google Vision OCR + regex."""
+    if not GOOGLE_VISION_AVAILABLE:
         return None
-
-    prompt = (
-        "This image is from a company compliance document (like MGT-7 or AOC-4 filings). "
-        "Extract all structured data you can find. "
-        "Return a JSON object with these keys (only include keys that have data):\n"
-        "- company_info: dict of company details (CIN, name, address, email, PAN, etc.)\n"
-        "- shareholders: list of {name, shares} dicts if a shareholder table exists\n"
-        "- directors: list of {name, din, designation} dicts if a directors table exists\n"
-        "- financial: dict of financial figures if present\n"
-        "- other_tables: list of any other tables as list-of-lists\n"
-        "Return ONLY valid JSON, no explanation."
-    )
-
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime,
-                            "data": image_b64,
-                        },
-                    },
-                    {"type": "text", "text": prompt}
-                ],
-            }]
-        )
-        return parse_ai_json(response.content[0].text)
-    except Exception:
+        image_bytes = base64.b64decode(image_b64)
+        text = _google_vision_ocr(image_bytes)
+        if not text:
+            return None
+
+        result = {'company_info': {}}
+
+        # Try all extractors
+        general = extract_general(text)
+        mgt = extract_mgt7(text, [])
+        aoc = extract_aoc4(text, [])
+
+        # Merge company_info
+        for data in [general, mgt, aoc]:
+            for k, v in data.get('company_info', {}).items():
+                result['company_info'].setdefault(k, v)
+
+        # Add other fields
+        if mgt.get('directors'):
+            result['directors'] = [
+                {'din': d[0] if len(d) > 0 else '', 'name': d[1] if len(d) > 1 else '', 'designation': d[2] if len(d) > 2 else ''}
+                for d in mgt['directors']
+            ]
+        if aoc.get('auditor'):
+            result['auditor'] = aoc['auditor']
+
+        return result if result['company_info'] else None
+    except Exception as e:
+        print(f"Vision OCR extraction error: {e}")
         return None
-
-
 
 
 def extract_structured_from_text(text):
-    """Try Claude first, fall back to OpenAI GPT-4o for text structuring."""
-    prompt = (
-        "Look at this document text carefully. Extract ALL information and organize it.\n"
-        "Return a JSON array of sections. Each section has:\n"
-        "  - heading: a short descriptive title (e.g. 'Company Details', 'Directors')\n"
-        "  - type: either 'fields', 'table', or 'text'\n"
-        "  - For type='fields': include 'data' as an object of key-value pairs\n"
-        "  - For type='table': include 'headers' (array of strings) and 'rows' (array of arrays)\n"
-        "  - For type='text': include 'content' as a plain string\n"
-        "Return ONLY valid JSON array, no explanation, no markdown fences.\n\n"
-        "Document text:\n"
-    )
+    """Structure text using regex patterns."""
+    sections = []
 
-    # ── Try Claude first ──────────────────────────────────
-    claude = get_anthropic_client()
-    if claude:
-        try:
-            response = claude.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt + text[:12000]}]
-            )
-            return parse_ai_json(response.content[0].text)
-        except Exception as e:
-            print(f"Claude text failed: {e} — trying OpenAI...")
+    # Try to extract known fields using regex
+    extracted = extract_general(text)
+    if extracted.get('company_info'):
+        sections.append({
+            'heading': 'Company Information',
+            'type': 'fields',
+            'data': extracted['company_info']
+        })
 
-    # ── Fallback: OpenAI GPT-4o ───────────────────────────
-    oai = get_openai_client()
-    if oai:
-        try:
-            response = oai.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt + text[:12000]}]
-            )
-            return parse_ai_json(response.choices[0].message.content)
-        except Exception as e:
-            print(f"OpenAI text failed: {e}")
+    # Try MGT-7 extraction
+    mgt_data = extract_mgt7(text, [])
+    if mgt_data.get('company_info'):
+        for k, v in mgt_data['company_info'].items():
+            if 'Company Information' not in [s.get('heading') for s in sections]:
+                sections.append({'heading': 'Company Information', 'type': 'fields', 'data': {}})
+            for s in sections:
+                if s.get('heading') == 'Company Information':
+                    s['data'][k] = v
+    if mgt_data.get('employees'):
+        sections.append({'heading': 'Employee Details', 'type': 'fields', 'data': mgt_data['employees']})
+    if mgt_data.get('directors'):
+        sections.append({'heading': 'Directors', 'type': 'table', 'headers': ['DIN', 'Name', 'Designation'], 'rows': mgt_data['directors']})
 
-    return [{'heading': 'Extracted Text', 'type': 'text', 'content': text}]
+    # Try AOC-4 extraction
+    aoc_data = extract_aoc4(text, [])
+    if aoc_data.get('auditor'):
+        sections.append({'heading': 'Auditor Details', 'type': 'fields', 'data': aoc_data['auditor']})
+
+    # If no structured data found, return raw text
+    if not sections:
+        sections.append({'heading': 'Extracted Text', 'type': 'text', 'content': text[:5000]})
+
+    return sections
 
 
 @app.errorhandler(500)
@@ -205,7 +181,11 @@ def too_large(e):
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'anthropic': bool(os.environ.get('ANTHROPIC_API_KEY'))})
+    return jsonify({
+        'status': 'ok',
+        'google_vision_available': GOOGLE_VISION_AVAILABLE,
+        'pdf2image_available': PDF2IMAGE_AVAILABLE,
+    })
 
 @app.route('/')
 def home():
@@ -220,6 +200,7 @@ def upload():
         print(f"Unhandled upload error: {exc}")
         return jsonify({'error': f'Unexpected server error: {str(exc)}'}), 500
 
+
 def _upload_inner():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'})
@@ -227,23 +208,21 @@ def _upload_inner():
     file = request.files['file']
     lower_name = file.filename.lower()
 
-    # Single image upload — OCR only, no AI
+    # Single image upload — OCR using Google Vision API
     image_exts = ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.webp')
     if lower_name.endswith(image_exts):
         image_bytes = file.read()
         text = ''
-        if OCR_AVAILABLE:
+        if GOOGLE_VISION_AVAILABLE:
             try:
-                from PIL import Image
-                img = Image.open(io.BytesIO(image_bytes))
-                text = pytesseract.image_to_string(img).strip()
+                text = _google_vision_ocr(image_bytes).strip()
             except Exception as e:
                 print(f"Image OCR error: {e}")
         if text:
             structured = [{'heading': 'Extracted Text', 'type': 'text', 'content': text}]
         else:
             structured = [{'heading': 'No Text Found', 'type': 'text',
-                           'content': 'Could not extract text from this image. Make sure Tesseract is installed.'}]
+                           'content': 'Could not extract text from this image. Check Google Vision API credentials.'}]
         return jsonify({
             'type': 'image',
             'filename': file.filename,
@@ -275,8 +254,8 @@ def _upload_inner():
 
     # Standalone Word (.docx)
     if lower_name.endswith('.docx'):
-        if not OCR_AVAILABLE:
-            return jsonify({'error': 'Word file support requires python-docx, pytesseract, and pdf2image to be installed'})
+        if not PDF2IMAGE_AVAILABLE:
+            return jsonify({'error': 'Word file support requires python-docx and pdf2image to be installed'})
         doc_data = file.read()
         try:
             doc = Document(io.BytesIO(doc_data))
@@ -331,7 +310,7 @@ def _upload_inner():
         os.remove(zip_path)
         return jsonify({'error': 'Invalid or corrupted ZIP file'})
 
-    # Read all entries up front so the ZipFile handle can be closed before threads run
+    # Read all entries up front so the ZipFile handle can be closed before processing
     entries = []
     with zipfile.ZipFile(zip_path, 'r') as z:
         for name in z.namelist():
@@ -371,7 +350,6 @@ def _upload_inner():
 
                 name_upper = short.upper()
                 text_upper = text[:2000].upper()
-                # Detect type by filename OR text content (handles generically named files)
                 is_aoc = 'AOC' in name_upper or 'FORM AOC' in text_upper or 'FORM NO. AOC' in text_upper
                 is_mgt = 'MGT' in name_upper or 'FORM MGT' in text_upper or 'FORM NO. MGT' in text_upper or 'ANNUAL RETURN' in text_upper
                 is_known_type = is_aoc or is_mgt
@@ -380,7 +358,6 @@ def _upload_inner():
                     structured = [{'heading': 'No Text Extracted', 'type': 'text',
                                     'content': 'Could not extract text from this PDF.'}]
                 elif is_known_type:
-                    # Regex extraction handles AOC-4/MGT-7; skip the extra AI call
                     structured = []
                 else:
                     structured = extract_structured_from_text(text)
@@ -442,7 +419,7 @@ def _upload_inner():
             print(f"Unhandled error processing {short}: {e}")
         return p
 
-    # Process entries sequentially, freeing memory after each entry
+    # Process entries sequentially
     partials = []
     for entry in entries:
         partials.append(process_zip_entry(entry))
@@ -575,7 +552,7 @@ def extract_mgt7(text, tables):
 
     emp_patterns = {
         'Total Employees': [r'[Tt]otal[^\n]*?[Ee]mployees?[^\n]*?(\d+)'],
-        'Female': [r'\b[Ff]emale\b[^\n]*?(\d+)'],   # Female before Male to avoid substring match
+        'Female': [r'\b[Ff]emale\b[^\n]*?(\d+)'],
         'Male': [r'\b[Mm]ale\b[^\n]*?(\d+)'],
     }
     for field, rxs in emp_patterns.items():
@@ -669,9 +646,11 @@ def extract_general(text):
 
 @app.route('/pdf-to-word', methods=['POST'])
 def pdf_to_word():
-    """Convert a scanned PDF to a Word document using OCR (Tesseract)."""
-    if not OCR_AVAILABLE:
-        return jsonify({'error': 'OCR libraries not installed (pytesseract, pdf2image, python-docx required)'}), 500
+    """Convert a scanned PDF to a Word document using Google Vision OCR."""
+    if not PDF2IMAGE_AVAILABLE:
+        return jsonify({'error': 'pdf2image library not installed'}), 500
+    if not GOOGLE_VISION_AVAILABLE:
+        return jsonify({'error': 'Google Vision API not configured'}), 500
 
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
@@ -683,14 +662,18 @@ def pdf_to_word():
     pdf_data = file.read()
 
     try:
-        images = convert_from_bytes(pdf_data, dpi=300)
+        images = convert_from_bytes(pdf_data, dpi=200)
     except Exception as e:
         return jsonify({'error': f'Failed to render PDF pages: {str(e)}'}), 500
 
     word_doc = Document()
 
     for i, image in enumerate(images):
-        ocr_text = pytesseract.image_to_string(image)
+        img_buffer = io.BytesIO()
+        image.save(img_buffer, format='PNG')
+        img_bytes = img_buffer.getvalue()
+        ocr_text = _google_vision_ocr(img_bytes)
+        image.close()
 
         heading = word_doc.add_paragraph()
         heading_run = heading.add_run(f'Page {i + 1}')
